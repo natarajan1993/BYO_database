@@ -52,3 +52,13 @@ func main() {
 
 - The syntax `func (node BNode) getPointer(index uint16) uint64` means that we are defining `getPointer()` as a **method** on the BNode struct
   - So we could call this method as `node.getPointer(...)` 
+
+- In Go, when you slice an array using `[start:end]`, both numbers must be absolute positions measured from the very beginning of the array (index 0).
+- `pos+4` is an absolute position (e.g., byte 3004).
+- `klen` is just a length (e.g., 4 bytes long).
+-  It is a relative size, not a position from the start of the page.
+-  If you try to write `node.data[3004 : 4]`, Go sees that your end number (4) is smaller than your start number (3004).
+-  This will cause your program to panic instantly with a "slice bounds out of range" error.
+-  The other option is `node.data[pos+4:][:klen]` 
+   -  `node.data[pos+4:]` creates a brand new, temporary slice where the key starts at index 0
+   -  Because index 0 is reset to the start of the key, doing [:klen] correctly clips it at the length of the key.

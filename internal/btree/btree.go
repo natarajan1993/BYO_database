@@ -17,7 +17,9 @@ type BTree struct {
 	del func(uint64)        // deallocates a page
 }
 
+// Go syntax for enums
 const (
+	// We need to make sure we start at 1 because uninitialized memory is all filled with 0s
 	BNODE_NODE = 1 // internal nodes without values
 	BNODE_LEAF = 2 // leaf nodes with values
 )

@@ -39,7 +39,7 @@
   - This improves querying by `O(sqrt(n))`
 
 ## B-Tree Operations
-- Assume we're using a variant of a B-tree called a B+ tree
+- Assume we're using a variant of a B-tree called a B| tree
 - **Querying** a B-tree is the same as querying a BST.
 ### Updating
 - Key insertion starts at a leaf
@@ -72,3 +72,31 @@
     - Likewise, the parent node is duplicated with the new pointer
   - Avoids data corruption
   - Readers can operate concurrently with writers 
+
+# The Complete Master Layout of a B+ Tree Page (4096 Bytes)
+Byte 0       4                          4 + (8 * N)                 4 + (8 * N) + (2 * N)       Byte 4096
++------------+--------------------------+---------------------------+---------------------------+----------------------+
+|   HEADER   |   CHILD POINTER ARRAY    |       OFFSET ARRAY        |       ... FREE SPACE ...  |  KV DATA             |
++------------+--------------------------+---------------------------+---------------------------+----------------------+
+|  4 Bytes   |   8 Bytes  ×  node.NKeys()  |   2 Bytes  ×  node.NKeys()  |   Shrinks as you add KVs  | Packed KVs      |
++------------+--------------------------+---------------------------+--------------------------------+-----------------+
+1. The Header (Fixed: 4 Bytes)
+   - This is the identity card of the page. 
+   - It always occupies bytes 0, 1, 2, and 3.
+   - Bytes 0–1 (2 Bytes): The type of node (BNODE_NODE or BNODE_LEAF).
+   - Bytes 2–3 (2 Bytes): The number of keys currently stored on this page (node.NKeys()).
+2. The Child Pointer Array (Variable Size)
+   - This section only matters if the node is an internal node (BNODE_NODE). 
+   - It stores 8-byte numbers (uint64) pointing to other page IDs.
+   - Starts at: Byte 4 (right after the header).
+   - Ends at: 4 + (8 * node.NKeys()).
+3. The Offset Array (Variable Size)
+   - Stores 2-byte numbers (uint16).
+   - Starts at: Exactly where the Child Pointers end.
+   - Math Formula: OffsetPos() calculates positions inside this zone.
+   - What it stores: It doesn't store starting positions; it stores the end position of each KV item relative to the beginning of the KV data section.
+4. The Key-Value Data Section (Variable Size)
+   - This is where your GetKey and GetVal methods do their work. 
+   - It is located at the very end of the page.
+   - Every time a new KV item is added, it is appended to the left of the previous item.
+   - **The structure of ONE item**:[ 2 Bytes Key Len ] [ 2 Bytes Val Len ] [ Raw Key Bytes ] [ Raw Value Bytes ]
