@@ -1,7 +1,6 @@
 package storage
 
 import (
-	. "BYO_database/internal/btree"
 	. "BYO_database/internal/utils"
 	"encoding/binary"
 )
