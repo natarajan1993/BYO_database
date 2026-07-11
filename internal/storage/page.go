@@ -22,6 +22,10 @@ type Page struct {
 	data []byte
 }
 
+func (p Page) Data() []byte {
+	return p.data
+}
+
 // Public Write method to write data byte array at a given position on the Page
 func (p Page) Write(pos uint16, data []byte) {
 	copy(p.data[pos:], data)

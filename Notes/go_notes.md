@@ -62,3 +62,23 @@ func main() {
 -  The other option is `node.data[pos+4:][:klen]` 
    -  `node.data[pos+4:]` creates a brand new, temporary slice where the key starts at index 0
    -  Because index 0 is reset to the start of the key, doing [:klen] correctly clips it at the length of the key.
+-  
+
+# The ...Page Syntax (Variadic Parameter)
+`func ReplaceChildNode(tree *BTree, new_p Page, old_p Page, index uint16, children ...Page) {}`
+The `...` before the type Page makes this a variadic parameter.
+In Go, it means you can pass zero, one, or many Page objects to this function, and the function will treat them as a slice (`[]Page`) inside the function body.
+```
+Example Call:
+ReplaceChildNode(myTree, new_p, old_p, 2, child1) (Passes 1 child)
+ReplaceChildNode(myTree, new_p, old_p, 2, child1, child2) (Passes 2 children)
+```
+
+This is incredibly useful for B-trees because when a node splits, it might result in two children (a standard split), or potentially more if you were doing advanced rebalancing.
+
+# What does tree *BTree mean?
+`func ReplaceChildNode(tree *BTree, new_p Page, old_p Page, index uint16, children ...Page) {}`
+The * symbol indicates that you are passing a pointer to the BTree struct, not a copy of the struct itself.
+- Passing by value (tree BTree): Go would make a full copy of the BTree struct every time the function is called. If you modified tree.root inside the function, the original BTree outside the function wouldn't change.
+- Passing by pointer (tree *BTree): Go passes the memory address of the BTree. This allows the function to see the "real" BTree and make permanent changes to it.
+- By passing a pointer, you can access the configuration and the callback functions of the tree efficiently without copying data.

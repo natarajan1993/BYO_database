@@ -92,19 +92,12 @@ func NodeLookupLE(node Page, key []byte) uint16 {
 	return found
 }
 
-func LeafInsert(new_p Page, old_p Page, index uint16, key []byte, val []byte) {
-	new_p.SetHeader(BNODE_LEAF, old_p.NKeys()+1)
-	NodeAppendRange(new_p, old_p, 0, 0, index)
-	NodeAppendKV(new_p, index, 0, key, val)
-	NodeAppendRange(new_p, old_p, index+1, index, old_p.NKeys()-index)
-}
-
 // All this function is doing is to insert the KV at the right spot inside a single Page
 // When you want to insert a brand-new KV pair into a leaf page:
 // 1. You run NodeLookupLE on that page to find the exact slot where your new key belongs.
 // 2. If the slot is already taken by a larger key, the database shifts all the existing bytes to the right to open up a gap.
-// 3. Finally, it calls NodeAppendKV to drop your new key into that open gap, preserving the sorted order.
-func NodeAppendKV(new_p Page, index uint16, pointer uint64, key []byte, val []byte) {
+// 3. Finally, it calls PageAppendKV to drop your new key into that open gap, preserving the sorted order.
+func PageAppendKV(new_p Page, index uint16, pointer uint64, key []byte, val []byte) {
 	new_p.SetPtr(index, pointer) // Set the page pointer to the index
 
 	pos := new_p.KVPos(index) // get the KV position at the index
@@ -121,8 +114,8 @@ func NodeAppendKV(new_p Page, index uint16, pointer uint64, key []byte, val []by
 	new_p.SetOffset(index+1, new_p.GetOffset(index)+4+keyLen+valLen) // Set the offset of the page to the end of this value
 }
 
-// NodeAppendRange copies a contiguous block of n Key-Value pairs (along with their child pointers) from an old Page into a new Page.
-// NodeAppendRange works identically for both Leaf Nodes and Internal Nodes
+// PageAppendRange copies a contiguous block of n Key-Value pairs (along with their child pointers) from an old Page into a new Page.
+// PageAppendRange works identically for both Leaf Nodes and Internal Nodes
 // new_p Page (Destination Page): The 4096-byte page slice we are currently constructing. This is where the data is being pasted into.
 // old Page (Source Page): The existing 4096-byte page slice we are reading from.
 // dstNew uint16 (Destination Start Index): The logical slot number in the new page where we should begin pasting.
@@ -131,7 +124,7 @@ func NodeAppendKV(new_p Page, index uint16, pointer uint64, key []byte, val []by
 // If srcOld = 2, we skip slots 0 and 1 of the old page and start grabbing data from slot 2.
 // n uint16 (Count / Number of Items): The total number of sequential Key-Value slots to copy over.
 // If n = 3, the loop will execute 3 times, copying slots srcOld, srcOld+1, and srcOld+2.
-func NodeAppendRange(new_p Page, old Page, dstNew uint16, srcOld uint16, n uint16) {
+func PageAppendRange(new_p Page, old Page, dstNew uint16, srcOld uint16, n uint16) {
 	for i := uint16(0); i < n; i++ {
 		srcIndex := srcOld + i
 		dstIndex := dstNew + i
@@ -140,8 +133,42 @@ func NodeAppendRange(new_p Page, old Page, dstNew uint16, srcOld uint16, n uint1
 		key := old.GetKey(srcIndex)
 		val := old.GetVal(srcIndex)
 
-		NodeAppendKV(new_p, dstIndex, ptr, key, val) // We let the underlying NodeAppendKV function do the heavy lifting of figuring out where the raw bytes actually live in each page
+		PageAppendKV(new_p, dstIndex, ptr, key, val) // We let the underlying PageAppendKV function do the heavy lifting of figuring out where the raw bytes actually live in each page
 	}
+}
+
+// creates a new leaf page containing the original data plus the new key-value pair, preserving sorted order
+// It implements a copy-on-write strategy by returning a new page rather than modifying the existing one.
+func LeafInsert(new_p Page, old_p Page, index uint16, key []byte, val []byte) {
+	new_p.SetHeader(BNODE_LEAF, old_p.NKeys()+1) // add 1 to the total keys for the key we are about to insert, and record that total as our new key count.
+	PageAppendRange(new_p, old_p, 0, 0, index)   // copy over all existing keys that are strictly smaller than our new key
+	// leaf nodes are at the very bottom of the tree—they don't have child pages, so the child pointer is always zero
+	PageAppendKV(new_p, index, 0, key, val)                            // Append the new key to the new page.
+	PageAppendRange(new_p, old_p, index+1, index, old_p.NKeys()-index) // copy over all existing keys that are larger than our new key
+}
+
+// Purpose: We are creating a new version of a parent node (new_p) that contains updated child pointers.
+// In a B-tree, when a node (let's call it Node A) gets too full and splits into two new nodes (Node B and Node C), the Parent of Node A needs to be updated.
+// The Parent is an Internal Node - its job is to route traffic.
+// Right now, it has a pointer to Node A. After the split, it needs to get rid of the pointer to Node A and add two new pointers: one for B and one for C.
+// Deletion: It removes the old, "full" child page pointer from the parent.
+// Insertion: It inserts the new, "split" child pages into that same spot.
+// Promotion: It adds the necessary "separator keys" so the parent knows how to route traffic between the new children.
+func ReplaceChildNode(tree *BTree, new_p Page, old_p Page, index uint16, children ...Page) {
+	child_count := uint16(len(children))                     // Get the new number of keys the parent will have
+	new_p.SetHeader(BNODE_NODE, old_p.NKeys()+child_count-1) // Take the old key count, add the number of new children (child_count), and subtract 1 because we are removing the one child we are replacing.
+	PageAppendRange(new_p, old_p, 0, 0, index)
+	for i, child_page := range children {
+		pointer := tree.new(child_page.Data()) // Save the child page to disk using the callback (tree.new). The disk address it returns becomes the new pointer in our internal node.
+		key := child_page.GetKey(0)            // Take the first key of that child page. In B-trees, the first key of a child is the "separator key" used to decide if a search goes left or right.
+		// index+uint16(i): We place these new pointers starting exactly where the old, bad pointer was.
+		PageAppendKV(new_p, index+uint16(i), pointer, key, nil)
+	}
+
+	// index+inc: This is the new starting position in the destination page. If we inserted 2 children where 1 used to be, the remaining pointers have to be shifted "to the right."
+	// index+1: This is the starting position in the source page (skipping the pointer we just replaced).
+	// old_p.NKeys()-(index+1): This counts how many items are left to copy.
+	PageAppendRange(new_p, old_p, index+child_count, index+1, old_p.NKeys()-(index+1)) // Copies everything in the parent that comes after the index we modified.
 }
 
 func main() {
