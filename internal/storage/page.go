@@ -5,8 +5,32 @@ import (
 	"encoding/binary"
 )
 
+// ┌───────────────────────────────────────────────────────────────────────┐
+// │                 A SINGLE FLAT 4096-BYTE PAGE                          │
+// ├──────────┬───────────────────┬───────────────────┬────────────────────┤
+// │  HEADER  │   POINTER ARRAY   │   OFFSET ARRAY    │  KEY-VALUE DATA    │
+// │ (4 bytes)│ (Page IDs: 0,1,2) │ (Positions in MV) │ (The actual data)  │
+// └──────────┴───────────────────┴───────────────────┴────────────────────┘
+//
+//	Your Database File on Disk
+//
+// ┌──────────────┐┌──────────────┐┌──────────────┐┌──────────────┐
+// │   Page #0    ││   Page #1    ││   ...        ││   Page #9    │
+// │ (Root Node)  ││ (Child Node) ││              ││ (Child Node) │
+// └──────────────┘└──────────────┘└──────────────┘└──────────────┘
 type Page struct {
 	data []byte
+}
+
+// Public Write method to write data byte array at a given position on the Page
+func (p Page) Write(pos uint16, data []byte) {
+	copy(p.data[pos:], data)
+}
+
+// Public Write method to write a uint16 value at a given position on the Page
+// We need to do this because Page -> data is a private field
+func (p Page) WriteUint16(pos uint16, val uint16) {
+	binary.LittleEndian.PutUint16(p.data[pos:], val)
 }
 
 // What is the Offset Array Used For?
@@ -43,9 +67,24 @@ func (node Page) GetPointer(index uint16) uint64 {
 	return binary.LittleEndian.Uint64(node.data[pos:])
 }
 
+// This method is responsible for saving a child page pointer (a 64-bit disk address or page ID) into a specific slot on a B+Tree node.
+// In a B+Tree, internal nodes don't just hold keys; they hold a list of pointers that tell the database which child page to open next when navigating down the tree
 func (node Page) SetPtr(index uint16, val uint64) {
 	Assert(index >= node.NKeys(), "Error: Index exceeds total keys in node")
+	// 	Visual Layout of the Pointer Section in Memory:
+	// ┌──────────┬────────────┬────────────┬────────────┐
+	// │  HEADER  │ Pointer 0  │ Pointer 1  │ Pointer 2  │ ...
+	// │ (4 bytes)│ (8 bytes)  │ (8 bytes)  │ (8 bytes)  │
+	// └──────────┴────────────┴────────────┴────────────┘
+	//            ▲            ▲
+	//            │            │
+	//          pos for      pos for
+	//          index 0      index 1
+
+	// B_TREE_POINTER_SIZE * index: Multiply the target slot number by 8 bytes (since a uint64 takes up exactly 8 bytes of space).
 	pos := HEADER + B_TREE_POINTER_SIZE*index
+	// binary.LittleEndian.PutUint64: Breaks your uint64 address value into 8 distinct bytes using Little Endian byte ordering
+	// (least significant byte first) and drops them directly into that memory window.
 	binary.LittleEndian.PutUint64(node.data[pos:], val)
 }
 

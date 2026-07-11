@@ -74,12 +74,11 @@
   - Readers can operate concurrently with writers 
 
 # The Complete Master Layout of a B+ Tree Page (4096 Bytes)
-Byte 0       4                          4 + (8 * N)                 4 + (8 * N) + (2 * N)       Byte 4096
-+------------+--------------------------+---------------------------+---------------------------+----------------------+
+| Byte 0       | 4                          | 4 + (8 * N)                 | 4 + (8 * N) + (2 * N) |       Byte 4096 |
+| ------------ | -------------------------- | --------------------------- | --------------------------- | ---------------------- | 
 |   HEADER   |   CHILD POINTER ARRAY    |       OFFSET ARRAY        |       ... FREE SPACE ...  |  KV DATA             |
-+------------+--------------------------+---------------------------+---------------------------+----------------------+
 |  4 Bytes   |   8 Bytes  ×  node.NKeys()  |   2 Bytes  ×  node.NKeys()  |   Shrinks as you add KVs  | Packed KVs      |
-+------------+--------------------------+---------------------------+--------------------------------+-----------------+
+
 1. The Header (Fixed: 4 Bytes)
    - This is the identity card of the page. 
    - It always occupies bytes 0, 1, 2, and 3.
@@ -100,3 +99,117 @@ Byte 0       4                          4 + (8 * N)                 4 + (8 * N) 
    - It is located at the very end of the page.
    - Every time a new KV item is added, it is appended to the left of the previous item.
    - **The structure of ONE item**:[ 2 Bytes Key Len ] [ 2 Bytes Val Len ] [ Raw Key Bytes ] [ Raw Value Bytes ]
+
+# Inserting data into a single Page
+1.Find the Insertion Index:
+- The high-level function calls `NodeLookupLE(old_node, new_key)`
+- Let's say it returns `index` = 2
+2.Allocate a New Page: 
+- It creates a brand new, empty 4096-byte slice in memory: `new_p := make([]byte, 4096)`
+3.Copy the Left Side:
+- It loops from 0 to 1 (everything before the insertion point). 
+- For each existing key in `old_node`, it reads it and calls `NodeAppendKV` to write it exactly as-is into `new_p`
+4.Drop in the New Key:
+- It reaches `index` = 2. 
+- It calls NodeAppendKV to write your brand new KV pair into `new_p`. 
+- This is where `SetOffset` updates the header so the next step knows where to resume writing.
+5.Copy the Right Side:
+- It loops through the rest of the keys in old_node (from index 2 to the end). 
+- For each one, it reads it from the old node and calls `NodeAppendKV` to append it into `new_p`. 
+- Because we inserted our new key in the previous step, all these older keys are naturally shifted one index to the right in the new page
+
+# Difference between an internal node and a leaf node
+| Attribute |	Internal Node (Branch / Routing) |	Leaf Node (Data Warehouse)|
+| -------- | -------- | -------- |
+| Tree Position | Top and middle of the B-tree | Very bottom level of the B-tree |
+| What it stores | Keys + Child Page Pointers | Keys + Actual Data Values |
+| Purpose |	Directs searches down to the right child | Holds the actual data payload you want to retrieve |
+| Search Action |	"Your key is smaller than X, go to Page #4" |	"Here is the value for your key: 'my_value'" |
+
+# Rules of the Tree Levels
+## Are ALL leaf nodes at the lowest level?
+Yes. By definition, a B-tree (and specifically a B+ tree, which is what most databases use) is perfectly balanced. Every single leaf node is exactly the same distance from the root. The actual data values only exist on this bottom floor.
+
+## Is there only one level of internal nodes?
+No. Depending on how much data you have, there can be zero, one, or multiple levels of internal nodes. A small database might have Root -> Leaves (1 internal level). A massive 100 GB database might have Root -> Internal L1 -> Internal L2 -> Internal L3 -> Leaves.
+
+## Is the root an internal node?
+Usually yes, BUT not always. The Root is a chameleon.
+When you create a brand-new database and insert your first row, the database only has one single page (Page #0).
+In a 1-page database, the Root is the Leaf Node. It holds both the routing keys and the actual data values.
+
+# How Trees Grow: Page Splitting
+Because our nodes are strictly locked to a 4096-byte limit, what happens when you try to insert a row into a Leaf Node that is already full?
+   - The database performs a **Page Split**.
+1.The Leaf Node Splits:
+  - When Leaf Page A is full (4096 bytes), the database allocates a brand-new 4KB page (Leaf Page B). 
+  - It takes half the KV pairs from Page A and moves them to Page B.
+2.The Parent gets Updated:The database must tell the parent Internal Node about this new Page B
+  - It takes the middle key from the split and pushes it up into the parent Internal Node, along with a pointer to Page B.
+3.The Ripple Effect (Internal Splits):
+  - If that parent Internal Node is also completely full of child pointers, it must split too
+  - It splits into two Internal Nodes, and pushes its middle key up to the next parent.
+
+# Adding a New Level: The Root Split
+- The only way a B-tree gets taller is when the Root Node gets full and splits.
+- Imagine your database has grown to three levels: Root (Internal) -> Internal -> Leaves.
+- Eventually, you insert a row at the bottom. 
+  - That leaf splits. 
+  - It pushes a key up. 
+  - The parent internal node is full, so it splits. 
+  - It pushes a key up to the Root.
+- But what if the Root is full?
+  - The Root page (Page #0) splits its contents into two brand-new pages (e.g., Page #50 and Page #51). 
+  - These two new pages are now on the level below the root.Page #0 (the Root) is completely wiped clean.
+  - The database writes exactly one key and two pointers into Page #0: pointing to Page #50 and Page #51.
+- The tree just got one level taller. The root didn't move downward; it split its contents, pushed them down, and stayed at the top to act as the new boss of those two nodes.
+
+**Because the tree always grows by splitting the root and adding a level above the rest of the data, all leaf nodes remain perfectly aligned at the exact same depth!**
+
+Imagine our 4KB pages can only hold 4 keys before filling up. 
+1.Initial State: A Full Root Page: 
+- Database currently contains only 1 page (Page #0).
+- When your database starts, Page #0 acts as both the Root and a Leaf node. 
+- It holds both keys and values. Right now, it is completely full with 4 keys:
+  
+```
+Page #0 (Type: LEAF | Pointers: None)
++-------------------------------------------------------+
+|  [Key: 10]  |  [Key: 20]  |  [Key: 30]  |  [Key: 40]  |
++-------------------------------------------------------+
+```
+
+- You attempt to run INSERT [Key: 25]. Because there is no room left in the 4096-byte array of Page #0, the database must trigger a root split
+
+2.Allocate Two Brand New Pages on Disk: Creating the new lower level (Level 0)
+- Instead of growing downward, the database allocates two brand-new blank 4KB pages at the end of your database file: Page #1 and Page #2
+- It copies the left half of the sorted data into Page #1, and the right half (including our new key 25) into Page #2
+- Both of these new pages are formatted as Leaf Nodes:
+
+```
+Page #1 (Type: LEAF)                Page #2 (Type: LEAF)
++---------------------------+       +-----------------------------------------+
+|  [Key: 10]  |  [Key: 20]  |       |  [Key: 25]  |  [Key: 30]  |  [Key: 40]  |
++---------------------------+       +-----------------------------------------+
+```
+
+3.Wipe Page #0 and Convert to Internal Node: The tree adds a level above the leaves
+- Now that the data is safely copied into Pages #1 and #2, the database completely wipes Page #0 clean.
+- It flips Page #0's header flag from LEAF to INTERNAL. 
+- It takes the first key of the right child (25) and promotes it into Page #0 as a routing boundary, along with pointers to our two new leaf pages:            
+```       
+                      Page #0 (Type: INTERNAL / ROOT)
+                   +---------------------------------------+
+                   | Ptr: Page #1 | Key: 25 | Ptr: Page #2 |
+                   +---------------------------------------+
+                                  /              \
+           Key < 25 goes Left    /                \    Key >= 25 goes Right
+                                v                  v
+              Page #1 (Type: LEAF)                  Page #2 (Type: LEAF)
+        +---------------------------+             +-----------------------------------------+
+        |  [Key: 10]  |  [Key: 20]  |             |  [Key: 25]  |  [Key: 30]  |  [Key: 40]  |
+        +---------------------------+             +-----------------------------------------+
+```
+
+- Notice how Page #0 never moved. It stayed right at the beginning of your database file (byte offset 0), but its role changed from storing data to routing traffic. 
+- That is how database trees grow upward while keeping the root locked at a fixed location on disk.
