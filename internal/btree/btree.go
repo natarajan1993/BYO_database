@@ -93,8 +93,10 @@ func NodeLookupLE(node Page, key []byte) uint16 {
 }
 
 func LeafInsert(new_p Page, old_p Page, index uint16, key []byte, val []byte) {
-	new_p.SetHeader(BNODE_LEAF, old_p.NKeys())
-	// TODO
+	new_p.SetHeader(BNODE_LEAF, old_p.NKeys()+1)
+	NodeAppendRange(new_p, old_p, 0, 0, index)
+	NodeAppendKV(new_p, index, 0, key, val)
+	NodeAppendRange(new_p, old_p, index+1, index, old_p.NKeys()-index)
 }
 
 // All this function is doing is to insert the KV at the right spot inside a single Page
@@ -117,6 +119,29 @@ func NodeAppendKV(new_p Page, index uint16, pointer uint64, key []byte, val []by
 	new_p.Write(pos+4+keyLen, val) // Write the value to the starting position of the data section in the page which would be kv start -> 2 bytes (key len) -> 2 bytes (val len) -> actual key length -> actual value
 
 	new_p.SetOffset(index+1, new_p.GetOffset(index)+4+keyLen+valLen) // Set the offset of the page to the end of this value
+}
+
+// NodeAppendRange copies a contiguous block of n Key-Value pairs (along with their child pointers) from an old Page into a new Page.
+// NodeAppendRange works identically for both Leaf Nodes and Internal Nodes
+// new_p Page (Destination Page): The 4096-byte page slice we are currently constructing. This is where the data is being pasted into.
+// old Page (Source Page): The existing 4096-byte page slice we are reading from.
+// dstNew uint16 (Destination Start Index): The logical slot number in the new page where we should begin pasting.
+// For example, if dstNew = 0, we start writing at the very first slot of the new page.
+// srcOld uint16 (Source Start Index): The logical slot number in the old page where we should begin reading.
+// If srcOld = 2, we skip slots 0 and 1 of the old page and start grabbing data from slot 2.
+// n uint16 (Count / Number of Items): The total number of sequential Key-Value slots to copy over.
+// If n = 3, the loop will execute 3 times, copying slots srcOld, srcOld+1, and srcOld+2.
+func NodeAppendRange(new_p Page, old Page, dstNew uint16, srcOld uint16, n uint16) {
+	for i := uint16(0); i < n; i++ {
+		srcIndex := srcOld + i
+		dstIndex := dstNew + i
+
+		ptr := old.GetPointer(srcIndex)
+		key := old.GetKey(srcIndex)
+		val := old.GetVal(srcIndex)
+
+		NodeAppendKV(new_p, dstIndex, ptr, key, val) // We let the underlying NodeAppendKV function do the heavy lifting of figuring out where the raw bytes actually live in each page
+	}
 }
 
 func main() {

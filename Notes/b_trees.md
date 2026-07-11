@@ -118,6 +118,26 @@
 - For each one, it reads it from the old node and calls `NodeAppendKV` to append it into `new_p`. 
 - Because we inserted our new key in the previous step, all these older keys are naturally shifted one index to the right in the new page
 
+# A Real Insert Example
+Imagine your Old Page has 4 keys: `[10, 20, 30, 40]` (at slots `0, 1, 2, 3`).
+You want to insert the key `25`. Binary search tells us `25` belongs at `slot #2`.
+Here is how we call `NodeAppendRange` to build the New Page:
+1. Copy the Left Side (Keys smaller than 25)
+We want to copy keys 10 and 20 (slots 0 and 1 from the old page) into slots 0 and 1 of the new page.
+   - NodeAppendRange(new, old, dstNew=0, srcOld=0, n=2)
+   - Translation: "Start at slot 0 of the old page, start at slot 0 of the new page, and copy 2 items."
+2. Insert the New Key
+   - We call `NodeAppendKV(new, index=2, ...)` to drop our new key 25 directly into slot #2 of the new page.
+3. Copy the Right Side (Keys larger than 25)
+- We still need to copy keys 30 and 40 over. In the old page, they were at slots 2 and 3. 
+- But in our new page, slot #2 is now taken by our new key
+- Therefore, they must be pasted into slots 3 and 4.
+  - `NodeAppendRange(new, old, dstNew=3, srcOld=2, n=2)`
+  - Translation: "Start reading from slot 2 of the old page, but paste them starting at slot 3 of the new page. Copy 2 items."
+
+- Notice how dstNew=3 and srcOld=2 are different in that final step
+- That difference of 1 is exactly what shifts the older keys to the right in the new page, making room for the key we just inserted without ever modifying the old page in place.
+
 # Difference between an internal node and a leaf node
 | Attribute |	Internal Node (Branch / Routing) |	Leaf Node (Data Warehouse)|
 | -------- | -------- | -------- |
