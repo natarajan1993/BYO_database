@@ -171,6 +171,39 @@ func ReplaceChildNode(tree *BTree, new_p Page, old_p Page, index uint16, childre
 	PageAppendRange(new_p, old_p, index+child_count, index+1, old_p.NKeys()-(index+1)) // Copies everything in the parent that comes after the index we modified.
 }
 
+func FindSplitIndex(page Page) uint16 {
+	totalBytes := uint16(HEADER)
+
+	for i := uint16(0); i < page.NKeys(); i++ {
+		kvSize := page.GetKVSize(i)
+
+		if totalBytes+kvSize > B_TREE_PAGE_SIZE/2 {
+			// Return the index of the KV where it exceeds 2048 bytes
+			return i
+		}
+
+		totalBytes += kvSize
+	}
+
+	// Fallback: if the page isn't full enough to split,
+	// or we reached the end, return the total count.
+	return page.NKeys()
+}
+
+func PageSplitInTwo(left Page, right Page, old Page) {
+	// Determine the split point
+	splitIndex := FindSplitIndex(old)
+
+	// Initialize the headers for the new nodes
+	left.SetHeader(old.BType(), splitIndex)
+	right.SetHeader(old.BType(), old.NKeys()-splitIndex)
+
+	// Copy the first half to the "left"
+	PageAppendRange(left, old, 0, 0, splitIndex)
+	// Copy the second half to the "right"
+	PageAppendRange(right, old, 0, splitIndex, old.NKeys()-splitIndex)
+}
+
 func main() {
 	node1max := HEADER + B_TREE_POINTER_SIZE + B_TREE_OFFSET_SIZE + 4 + B_TREE_MAX_KEY_SIZE + B_TREE_MAX_VAL_SIZE
 	fmt.Println(node1max)

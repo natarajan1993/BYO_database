@@ -52,6 +52,8 @@ func (p Page) WriteUint16(pos uint16, val uint16) {
 // | key_len | value_len | key | val |
 // | 2 Bytes | 2 Bytes  | ... | ... |
 // The format packs everything back to back
+
+// This method returns the type of the Node that we defined as BNODE_NODE or BNODE_LEAF
 func (node Page) BType() uint16 {
 	return binary.LittleEndian.Uint16(node.data[0:2])
 }
@@ -147,7 +149,7 @@ func (node Page) GetKey(index uint16) []byte {
 	klen := binary.LittleEndian.Uint16(node.data[pos:]) //  the first 2 bytes always store the length of the key. Next 2 bytes store the length of the value
 	// node.data[pos+4:] means get to the start of the key position and get the data all the way to the end of the page
 	// immediately applying [:klen] will cut it off at the length of the key
-	return node.data[pos+4:][:klen]
+	return node.data[pos+KLEN+VLEN:][:klen]
 }
 
 func (node Page) GetVal(index uint16) []byte {
@@ -155,10 +157,21 @@ func (node Page) GetVal(index uint16) []byte {
 	pos := node.KVPos(index) //  get the exact starting byte index of the KV item in memory
 	klen := binary.LittleEndian.Uint16(node.data[pos:])
 	vlen := binary.LittleEndian.Uint16(node.data[pos+2:])
-	return node.data[pos+4+klen:][:vlen]
+	return node.data[pos+KLEN+VLEN+klen:][:vlen]
 }
 
 // returns the node size (used space) with an off-by-one lookup
 func (node Page) NBytes() uint16 {
 	return node.KVPos(node.NKeys())
+}
+
+// returns the size of a KV pair at a given index
+// We need to add the KV_METADATA_SIZE to get the correct size of the KV
+// If your page layout is:
+// [Child Pointer (8)] + [KeyLen (2)] + [ValLen (2)] + [Key Data] + [Val Data]
+// then every single slot costs you 12 bytes of fixed overhead, regardless of how short the key and value are.
+// If you don't account for those 12 bytes in your split logic, your totalBytes count will be too low
+// your "halved" page might actually exceed 4096 bytes when you try to write it
+func (node Page) GetKVSize(index uint16) uint16 {
+	return KV_METADATA_SIZE + uint16(len(node.GetKey(index))+len(node.GetVal(index)))
 }
