@@ -31,6 +31,13 @@ const (
 	BNODE_LEAF = 2 // leaf nodes with values
 )
 
+type OpMode int
+
+const (
+	OpInsert OpMode = iota // 0
+	OpUpdate               // 1
+)
+
 // NodeLookupLE searches a flat 4KB Page to find the index of the first key that is greater than or equal to (>=) our search key.
 func NodeLookupLE(node Page, key []byte) uint16 {
 	// Read the total number of keys currently stored in this 4096-byte page.
@@ -138,14 +145,35 @@ func PageAppendRange(new_p Page, old Page, dstNew uint16, srcOld uint16, n uint1
 	}
 }
 
-// creates a new leaf page containing the original data plus the new key-value pair, preserving sorted order
-// It implements a copy-on-write strategy by returning a new page rather than modifying the existing one.
-func LeafInsert(new_p Page, old_p Page, index uint16, key []byte, val []byte) {
-	new_p.SetHeader(BNODE_LEAF, old_p.NKeys()+1) // add 1 to the total keys for the key we are about to insert, and record that total as our new key count.
-	PageAppendRange(new_p, old_p, 0, 0, index)   // copy over all existing keys that are strictly smaller than our new key
+// The difference between Insert and Update
+// Insert: You want to keep the existing key at index (if any) and push everything else to the right.
+// Your LeafInsert already does this correctly by copying index to old_p.NKeys() - index.
+// Update: You want to overwrite the key at index.
+func LeafUpsert(new_p Page, old_p Page, index uint16, key []byte, val []byte, mode OpMode) {
+	if mode != OpInsert && mode != OpUpdate {
+		panic("LeafUpsert: Error invalid mode")
+	}
+
+	newKeys := old_p.NKeys()
+
+	if mode == OpInsert {
+		newKeys++
+	}
+
+	new_p.SetHeader(BNODE_LEAF, newKeys) // add 1 to the total keys for the key we are about to insert, and record that total as our new key count. If it's update, it stays the same
+
+	PageAppendRange(new_p, old_p, 0, 0, index) // copy over all existing keys that are strictly smaller than our new key
+
 	// leaf nodes are at the very bottom of the tree—they don't have child pages, so the child pointer is always zero
-	PageAppendKV(new_p, index, 0, key, val)                            // Append the new key to the new page.
-	PageAppendRange(new_p, old_p, index+1, index, old_p.NKeys()-index) // copy over all existing keys that are larger than our new key
+	PageAppendKV(new_p, index, 0, key, val) // Append the new key to the new page.
+
+	if mode == OpUpdate {
+		// "updating" is really just inserting a new version of the key and deleting the old one.
+		// We skip the old key/val at 'index' by starting the source at 'index + 1'
+		PageAppendRange(new_p, old_p, index+1, index+1, old_p.NKeys()-(index+1))
+	} else {
+		PageAppendRange(new_p, old_p, index+1, index, old_p.NKeys()-index) // copy over all existing keys that are larger than our new key
+	}
 }
 
 // Purpose: We are creating a new version of a parent node (new_p) that contains updated child pointers.
