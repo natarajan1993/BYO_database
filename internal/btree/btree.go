@@ -213,27 +213,42 @@ func PageSplitInTwo(left Page, right Page, old Page) []byte {
 }
 
 // split a node if it's too big. the results are 1~3 nodes.
+// In a B-tree, when a node gets too full, you split it. But there is a catch: splitting a node creates a new key that must be inserted into the parent.
+// If the parent is also full, the parent must split. If the parent's parent is full, it must split. This can trigger a chain reaction all the way to the root.
+// nodeSplit3 is an optimization used during Insertion to handle the "split-then-split" scenario gracefully.
+// Instead of performing two separate, expensive operations, it proactively checks: "If I split this once, will the result still be too big?
+// If so, let's just split it twice right now."
+// It reduces the complexity of your insertion logic by ensuring that once you move up one level, you have a "guaranteed fit" for the new promoted keys.
+// It acknowledges that a node can, at most, split into three parts if you are doing a standard 50/50 split.
+// By handling the "split-of-a-split" right here, your Insert function becomes much simpler
+// It just asks nodeSplit3 to give it the resulting 1, 2, or 3 pages, and it proceeds to write them to disk and update the parent pointers.
+// [3]Page means even if you only use 1 or 2 of those slots, the space for 3 is allocated
+// uint16 is the count of the number of Pages we are returning
 func PageSplitInThree(old Page) (uint16, [3]Page) {
 	// 1. Initial check. If we don't need to split, then return the slice of 3 Page objects immediately
 	if len(old.Data()) <= B_TREE_PAGE_SIZE {
-		return 1, [3]Page{old}
+		return 1, [3]Page{old, Page{}, Page{}}
 	}
 
 	// 2. Prepare for the first split
+	// We allocate 2 pages for 'left' because we don't know if it will need a second split.
+	// right is guaranteed to be <= 4096 bytes. left might still be >= 4096 bytes, so we give it extra memory just in case.
 	left := storage.NewPage(make([]byte, 2*B_TREE_PAGE_SIZE))
 	right := storage.NewPage(make([]byte, B_TREE_PAGE_SIZE))
 
 	PageSplitInTwo(left, right, old) // Split
 
-	// Return 2 Nodes
+	// 3. Check if the 'left' side is now small enough.
 	if len(left.Data()) <= B_TREE_PAGE_SIZE {
+		// If it is small enough, return 2 Pages
 		return 2, [3]Page{
 			storage.NewPage(left.Data()[:B_TREE_PAGE_SIZE]),
 			right,
+			Page{}, // I am explicitly sending an empty Page{} for clarity even though the compiler will auto add this
 		}
 	}
 
-	// 4. Second split logic: Split 'left' again
+	// 4. If 'left' is STILL too big, split it again.
 	secondLeftSplit := storage.NewPage(make([]byte, B_TREE_PAGE_SIZE))
 	middle := storage.NewPage(make([]byte, B_TREE_PAGE_SIZE))
 
