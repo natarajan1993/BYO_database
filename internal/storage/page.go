@@ -37,6 +37,10 @@ func (p Page) WriteUint16(pos uint16, val uint16) {
 	binary.LittleEndian.PutUint16(p.data[pos:], val)
 }
 
+func NewPage(data []byte) Page {
+	return Page{data: data}
+}
+
 // What is the Offset Array Used For?
 // In a B+Tree page layout, the Offset Array is a table of contents for the data inside that specific node.
 // A node stores variable-length items (like keys and values) packed tightly at the end of the byte page.

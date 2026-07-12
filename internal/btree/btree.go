@@ -1,6 +1,7 @@
 package btree
 
 import (
+	"BYO_database/internal/storage"
 	. "BYO_database/internal/storage"
 	. "BYO_database/internal/utils"
 	"bytes"
@@ -190,7 +191,7 @@ func FindSplitIndex(page Page) uint16 {
 	return page.NKeys()
 }
 
-func PageSplitInTwo(left Page, right Page, old Page) {
+func PageSplitInTwo(left Page, right Page, old Page) []byte {
 	// Determine the split point
 	splitIndex := FindSplitIndex(old)
 
@@ -202,6 +203,48 @@ func PageSplitInTwo(left Page, right Page, old Page) {
 	PageAppendRange(left, old, 0, 0, splitIndex)
 	// Copy the second half to the "right"
 	PageAppendRange(right, old, 0, splitIndex, old.NKeys()-splitIndex)
+
+	// If internal node, return the first key of the right node
+	// to be pushed up to the parent.
+	if old.BType() == BNODE_NODE {
+		return right.GetKey(0)
+	}
+	return nil
+}
+
+// split a node if it's too big. the results are 1~3 nodes.
+func PageSplitInThree(old Page) (uint16, [3]Page) {
+	// 1. Initial check. If we don't need to split, then return the slice of 3 Page objects immediately
+	if len(old.Data()) <= B_TREE_PAGE_SIZE {
+		return 1, [3]Page{old}
+	}
+
+	// 2. Prepare for the first split
+	left := storage.NewPage(make([]byte, 2*B_TREE_PAGE_SIZE))
+	right := storage.NewPage(make([]byte, B_TREE_PAGE_SIZE))
+
+	PageSplitInTwo(left, right, old) // Split
+
+	// Return 2 Nodes
+	if len(left.Data()) <= B_TREE_PAGE_SIZE {
+		return 2, [3]Page{
+			storage.NewPage(left.Data()[:B_TREE_PAGE_SIZE]),
+			right,
+		}
+	}
+
+	// 4. Second split logic: Split 'left' again
+	secondLeftSplit := storage.NewPage(make([]byte, B_TREE_PAGE_SIZE))
+	middle := storage.NewPage(make([]byte, B_TREE_PAGE_SIZE))
+
+	// We treat the current 'left' as the new 'old' page
+	PageSplitInTwo(secondLeftSplit, middle, left)
+
+	// If it's still too big, we can't do anything
+	Assert(len(secondLeftSplit.Data()) > B_TREE_PAGE_SIZE, "PageSplitInThree: secondLeftSplit page still too large!")
+
+	// Return 3 pages: (secondLeftSplit, middle, right)
+	return 3, [3]Page{secondLeftSplit, middle, right}
 }
 
 func main() {
