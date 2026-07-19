@@ -290,6 +290,37 @@ func PageSplitInThree(old Page) (uint16, [3]Page) {
 	return 3, [3]Page{secondLeftSplit, middle, right}
 }
 
+func NodeInsert(tree *BTree, new_p Page, node Page, index uint16, key []byte, value []byte) {
+	key_pointer := node.GetPointer(index)
+	child_node := TreeInsert(tree, NewPage(tree.get(key_pointer)), key, value)
+	nsplit, split := PageSplitInThree(child_node)
+	tree.del(key_pointer)
+	ReplaceChildNode(tree, new_p, node, index, split[:nsplit]...)
+}
+
+func TreeInsert(tree *BTree, page Page, key []byte, value []byte) Page {
+	// Result Page is allowed to be bigger than one Page and will be split if needed
+	new_p := NewPage(make([]byte, 2*B_TREE_PAGE_SIZE))
+
+	index := NodeLookupLE(page, key) // determine where to insert the key
+
+	switch page.BType() {
+	case BNODE_LEAF:
+		if bytes.Equal(key, page.GetKey(index)) {
+			LeafUpsert(new_p, page, index, key, value, OpUpdate)
+		} else {
+			LeafUpsert(new_p, page, index+1, key, value, OpInsert)
+		}
+	case BNODE_NODE:
+		// Insert the child node
+		NodeInsert(tree, new_p, page, index, key, value)
+	default:
+		panic("TreeInsert: Bad Upsert Mode!")
+	}
+
+	return new_p
+}
+
 func main() {
 	node1max := HEADER + B_TREE_POINTER_SIZE + B_TREE_OFFSET_SIZE + 4 + B_TREE_MAX_KEY_SIZE + B_TREE_MAX_VAL_SIZE
 	fmt.Println(node1max)
